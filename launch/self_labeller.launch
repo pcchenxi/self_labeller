@@ -1,0 +1,10 @@
+<!-- -->
+<launch>
+
+  <node pkg="self_labeller" type="self_labeller" name="self_labeller" output="screen">
+
+    <remap from="/points_raw" to="/mapping_nodelet/pointcloud" />
+    <remap from="/image_raw" to="/kinect2/qhd/image_color" />
+  </node>
+  
+</launch>
