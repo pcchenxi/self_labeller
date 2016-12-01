@@ -38,7 +38,7 @@ public:
   ros::Time cloud_in_time_;
 
   Mat img_ori, image_label;
-  Mat img_seg_, img_path_, img_fused_, img_depth_, img_all_, img_rgb_;
+  Mat img_seg_, img_path_, img_fused_, img_depth_, img_disparity_, img_all_, img_rgb_;
 
   pcl::PointCloud<pcl::PointXYZRGB> cloud_g;
   pcl::PointCloud<pcl::PointXYZRGB> cloud_v;
@@ -121,24 +121,25 @@ public:
 
   pcl::PointCloud<pcl::PointXYZRGB> get_visiable_path(Mat image_raw, pcl::PointCloud<pcl::PointXYZRGB> cloud_path)
   {
-    // img_path_ = Mat(img_depth_.rows, img_depth_.cols, CV_8UC1, Scalar(0));
-    img_path_ = image_raw.clone();
+    // img_path_ = Mat(image_raw.rows, image_raw.cols, CV_8UC1, Scalar(2));
+    // Mat img_display = image_raw.clone();
     int count_invisable = 0;
     for(int i = 0; i < cloud_path.points.size(); i++)
     {
       pcl::PointXYZRGB path_point = cloud_path.points[i];
-      // if(path_point.z > 5)
-      //   continue;
+      if(path_point.z > 5)
+        continue;
 
       cv::Point3d pt_cv(path_point.x, path_point.y, path_point.z);
 
       cv::Point2d uv;
       uv = project3D_to_image(pt_cv, "kinect2_rgb_optical_frame");
 
-      int boundary = 15;
+      int boundary = 20;
       if(uv.x >= boundary && uv.x < img_depth_.cols - boundary && uv.y >= boundary && uv.y < img_depth_.rows - boundary)
       {
-        unsigned short depth_before = img_depth_.at<unsigned short>(uv.y, uv.x);
+        // unsigned short depth_before = img_depth_.at<unsigned short>(uv.y, uv.x);
+        float depth_before = img_depth_.at<float>(uv.y, uv.x);
 
         cv::Point3d pt_cv2(path_point.x + 0.30, path_point.y, path_point.z);
         cv::Point2d uv2;
@@ -146,38 +147,48 @@ public:
 
         int radius = abs(uv2.x - uv.x);
 
-        unsigned short disparity = scale/path_point.z * 256 + 1;
-        cout << disparity << " depth image: " << (int)depth_before << " " << disparity - depth_before << endl;
+        // unsigned short disparity = scale/path_point.z * 256 + 1;
+        float dist_before = (256.0 * scale) / (depth_before - 1); 
 
-        if(depth_before > disparity)
+        // cout << path_point.z << " " << depth_before << endl;
+
+        if(path_point.z - depth_before > 0.1)
         {
           cloud_path.points[i].r = 255;
           // count_invisable ++;
           // cv::circle(img_path_, uv, radius, Scalar(0, 0, 255), -1);  
+
+          // cv::circle(img_depth_, uv, 5, Scalar(0, 0, 255), -1);  
         }
         else
         {
           cloud_path.points[i].b = 255;
-          cout << "radius: " << radius << endl;
-          cv::circle(img_path_, uv, radius, Scalar(255, 0, 0), -1);  
+          cv::circle(img_path_, uv, radius, Scalar(1, 1, 1), -1);  
+          cv::circle(img_rgb_, uv, radius, Scalar(255, 1, 1), -1);  
+
         }
       }
     }
     cout << "occluded path points: " << count_invisable << endl;
     
+    // imshow("img_disparity_", img_disparity_);
+    imshow("img_rgb_", img_rgb_);
     imshow("img_path_", img_path_);
     waitKey(50);
-
+ 
     return cloud_path;
   }
 
-  Mat get_disparity(Mat image_raw, string frame_id, pcl::PointCloud<pcl::PointXYZRGB> pcl_cloud_filtered)
+  int get_disparity(Mat image_raw, string frame_id, pcl::PointCloud<pcl::PointXYZRGB> pcl_cloud_filtered)
   {   
     // init output image
     if(pcl_cloud_filtered.points.size() == 0)
-      return image_raw;
+      return 0;
     
     img_rgb_ = image_raw.clone();
+
+    // init path image and draw obstacle detected by geometric feature
+    img_path_ = Mat(image_raw.rows, image_raw.cols, CV_8UC1, Scalar(2));
 
     string image_frame_id;
     if(frame_id == "kinect2_rgb_optical_frame")
@@ -185,7 +196,8 @@ public:
     else 
       image_frame_id  = "overhead_camera_link";
 
-    img_depth_ = Mat(image_raw.rows, image_raw.cols, CV_16UC4, Scalar(0));
+    img_depth_ = Mat(image_raw.rows, image_raw.cols, CV_32FC1, Scalar(0));
+    img_disparity_ = Mat(image_raw.rows, image_raw.cols, CV_16UC1, Scalar(0));
     // img_all_   = Mat(image_raw.rows, image_raw.cols, CV_16UC4, Scalar(0));
     // Mat img_depth_display_   = Mat(image_raw.rows, image_raw.cols, CV_16UC1, Scalar(0));
 
@@ -204,20 +216,30 @@ public:
       
       if(uv.x >= 0 && uv.x < image_raw.cols && uv.y >= 0 && uv.y < image_raw.rows)
       {
-        // float depth = point_transd.z;
-        unsigned short depth = scale/point_transd.z * 256 + 1;
+        float depth = point_transd.z;
+        unsigned short disparity = scale/point_transd.z * 256 + 1;
 
-        unsigned short depth_before = img_depth_.at<unsigned short>(uv.y, uv.x);
+        float depth_before = img_depth_.at<float>(uv.y, uv.x);
 
-        if(depth_before < depth)
-          // img_depth_.at<float>(uv.y, uv.x) = depth;
-          cv::circle(img_depth_, uv, 5, Scalar(depth, depth, depth), -1);  
+        if(depth < depth_before || depth_before == 0)
+        {
+            // img_depth_.at<float>(uv.y, uv.x) = depth;
+            cv::circle(img_depth_, uv, 7, Scalar(depth, depth, depth), -1);  
+            cv::circle(img_disparity_, uv, 7, Scalar(disparity, disparity, disparity), -1);  
+
+            if(point_transd.r != 0)
+            {
+              cv::circle(img_path_, uv, 7, Scalar(0), -1);  
+              cv::circle(img_rgb_, uv, 7, Scalar(0, 255, 0), -1);  
+            }
+
+        }  
       }
     } 
 
-    Mat element = getStructuringElement(MORPH_RECT, Size(3,3));
-    morphologyEx(img_depth_, img_depth_, MORPH_DILATE, element);
-    cout << "got depth image" << img_depth_.rows << " " << img_depth_.cols << endl;
+    // Mat element = getStructuringElement(MORPH_RECT, Size(3,3));
+    // morphologyEx(img_depth_, img_depth_, MORPH_DILATE, element);
+    // cout << "got depth image" << img_depth_.rows << " " << img_depth_.cols << endl;
 
     // for(int row = 0; row < image_raw.rows; row ++)
     // {
@@ -237,9 +259,9 @@ public:
     //   }
     // }
     // cout << "got all image " << img_all_.rows << " " << img_all_.cols << endl;
-    imshow("depth", img_depth_);
-    // waitKey(0);
-    return img_depth_;  
+    // imshow("image_raw", image_raw);
+    // waitKey(100);
+    return 1;  
   }
 };
 

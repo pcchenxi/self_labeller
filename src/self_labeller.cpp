@@ -18,16 +18,21 @@
 #include <pcl_ros/transforms.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/filters/passthrough.h>
- 
+
+#include <pthread.h>
+
 #include "self_labeller.h" 
+
+
  
 using namespace std;  
 using namespace cv; 
 tf::TransformListener* tfListener = NULL;
 
-image_transport::Publisher pub_img;
+image_transport::Publisher pub_img_raw, pub_img_label, pub_img_depth;
 ros::Publisher  pub_cloud, pub_path;
 
+bool rosbag_finished_ = false;
 /////////////////////////////////////////////////////////////
 string input_frame_ = "base_link_oriented";
 string world_frame_ = "world_corrected";
@@ -37,9 +42,11 @@ string camera_frame_= "kinect2_rgb_optical_frame";
 vector<Eigen::Matrix4f> transforms_to_camera_;
 vector<Eigen::Matrix4f> transforms_to_world_;
 vector<Mat> raw_images_;
+vector<sensor_msgs::PointCloud2> registered_clouds_;
 
 pcl::PointCloud<pcl::PointXYZRGB> robot_path_;
-sensor_msgs::PointCloud2ConstPtr registered_cloud_;
+sensor_msgs::PointCloud2 registered_cloud_;
+Eigen::Matrix4f cloud_to_camera_;
 
 int count_ = 0;
 
@@ -63,7 +70,7 @@ void publish(ros::Publisher pub, pcl::PointCloud<pcl::PointXYZRGB> cloud, int ty
         sensor_msgs::convertPointCloud2ToPointCloud(pointlcoud2, pointlcoud);
 
         pointlcoud.header = pointlcoud2.header;
-        pub.publish(pointlcoud);
+        pub.publish(pointlcoud);   
     }
 }
 
@@ -72,9 +79,9 @@ sensor_msgs::PointCloud2 transform_cloud(sensor_msgs::PointCloud2 cloud_in, stri
     ////////////////////////////////// transform ////////////////////////////////////////
     sensor_msgs::PointCloud2 cloud_out;
     tf::StampedTransform to_target;
-
-    try 
-    {
+   
+    try   
+    { 
         // tf_listener_->waitForTransform(frame_target, cloud_in.header.frame_id, cloud_in.header.stamp, ros::Duration(1.0));
         tfListener->lookupTransform(frame_target, cloud_in.header.frame_id, cloud_in.header.stamp, to_target);
         // tfListener->lookupTransform(frame_target, cloud_in.header.frame_id, ros::Time(0), to_target);
@@ -120,56 +127,64 @@ pcl::PointCloud<pcl::PointXYZRGB> cloud_filter(pcl::PointCloud<pcl::PointXYZRGB>
 
     return *cloud_passthrough; 
 } 
+ 
 
-
-Mat label_path(const sensor_msgs::ImageConstPtr& image_msg)
+Mat label_path()
 {
-    // init output image 
-    Mat image_raw, labeled_img; 
-    // try { 
-    //   image_raw = cv_bridge::toCvShare(image_msg, "bgr8")->image;
-    // }
-    // catch (cv_bridge::Exception& ex){  
-    //   cout << ex.what() << endl;
-    // }
-    // labeled_img = Mat(labeled_img.rows, labeled_img.cols, CV_8UC1, Scalar(0));
-
-    // convert pointcloud   
+    // convert pointcloud    
     pcl::PointCloud<pcl::PointXYZRGB> pcl_cloud, path_camera, cloud_camera, filtered_world;
 
-    sensor_msgs::PointCloud2 cloud_transformed = transform_cloud(*registered_cloud_, world_frame_);
-    pcl::fromROSMsg(cloud_transformed, pcl_cloud); 
+    // sensor_msgs::PointCloud2 cloud_transformed = transform_cloud(*registered_cloud_, world_frame_);
+    // pcl::fromROSMsg(cloud_transformed, pcl_cloud); 
+ 
+    // int start = transforms_to_camera_.size() - 10;
+    // if(start < 0) 
+    //     start = 0; 
 
-    int start = transforms_to_camera_.size() - 10;
-    if(start < 0)
-        start = 0;
-
-    for(int i = start; i < transforms_to_camera_.size(); i++)
-    // for(int i = 0; i < 1; i++)
+    // for(int i = start; i < transforms_to_camera_.size(); i++)
+    for(int i = 0; i < transforms_to_camera_.size()-5; i++)
     {   
+        cout << "pose: " << i << " " << transforms_to_camera_.size() << endl;
+
+        // transform cloud to world
+        // sensor_msgs::PointCloud2 cloud_transformed = transform_cloud(registered_clouds_[i], world_frame_);
+        pcl::fromROSMsg(registered_clouds_[i], pcl_cloud); 
+ 
         Eigen::Matrix4f transform_to_camera = transforms_to_camera_[i];
         Eigen::Matrix4f transforms_to_world = transforms_to_world_[i];
         pcl::transformPointCloud (pcl_cloud, cloud_camera, transform_to_camera);
         pcl::transformPointCloud (robot_path_, path_camera, transform_to_camera);
 
-        cloud_camera = cloud_filter(cloud_camera);
+        cloud_camera = cloud_filter(cloud_camera); 
 
-        ci_mapper->get_disparity(raw_images_[i], camera_frame_, cloud_camera);
+        if(!ci_mapper->get_disparity(raw_images_[i], camera_frame_, cloud_camera))
+            continue; 
+  
         path_camera = ci_mapper->get_visiable_path(raw_images_[i], path_camera);
 
         pcl::PointCloud<pcl::PointXYZRGB> path_world;
         pcl::transformPointCloud (path_camera, path_world, transforms_to_world);
         path_world.header.frame_id = world_frame_;
-        publish(pub_path, path_world);
+        publish(pub_path, path_world); 
+        publish(pub_cloud, pcl_cloud); 
 
+        sensor_msgs::ImagePtr img_raw      = cv_bridge::CvImage(std_msgs::Header(), "bgr8", raw_images_[i]).toImageMsg();
+        sensor_msgs::ImagePtr img_label    = cv_bridge::CvImage(std_msgs::Header(), "mono8", ci_mapper->img_path_).toImageMsg();
+        sensor_msgs::ImagePtr img_depth    = cv_bridge::CvImage(std_msgs::Header(), "mono16", ci_mapper->img_disparity_).toImageMsg();
+
+        pub_img_raw.publish(img_raw);
+        pub_img_label.publish(img_label);
+        pub_img_depth.publish(img_depth);
+
+        // sleep(1);
         // imshow("image_raw", raw_images_[i]);
-        // waitKey(100);
+        // waitKey(1000);
 
-        break;
+        // break;
     }
 
 
-    return labeled_img;
+    // return labeled_img;
 }
 
 
@@ -178,12 +193,13 @@ void imageCallback_raw(sensor_msgs::ImageConstPtr image_msg)
     // start processing
     // cout << "raw image recieved: " <<image_msg->header.frame_id << endl;
     camera_frame_ = image_msg->header.frame_id;
-    if(count_ > 11)
-    {
-        label_path(image_msg);
-        robot_path_.header.frame_id = world_frame_;
-        // publish(pub_cloud, robot_path_);
-    }
+
+    // if(rosbag_finished_)
+    // {
+    //     label_path();
+    //     robot_path_.header.frame_id = world_frame_;
+    //     // publish(pub_cloud, robot_path_);
+    // }
     // else
     {
         // get camera position in world frame and get transform from world to camera frame
@@ -231,6 +247,7 @@ void imageCallback_raw(sensor_msgs::ImageConstPtr image_msg)
 
         transforms_to_camera_.push_back(eigen_transform);
         transforms_to_world_.push_back(eigen_transform_toworld);
+        registered_clouds_.push_back(registered_cloud_);
 
         robot_path_.header.frame_id = world_frame_;
         // publish(pub_cloud, robot_path_);
@@ -241,14 +258,25 @@ void imageCallback_raw(sensor_msgs::ImageConstPtr image_msg)
 
 void callback_velodyne(const sensor_msgs::PointCloud2ConstPtr &cloud_in)
 {
-    registered_cloud_ = cloud_in;
+    // registered_cloud_ = cloud_in;
     input_frame_ = cloud_in->header.frame_id;
+
+    tf::StampedTransform to_camera;
+    try 
+    {
+        registered_cloud_ = transform_cloud(*cloud_in, world_frame_);
+    }
+    catch (tf::TransformException& ex) 
+    {
+        ROS_WARN("[draw_frames] TF exception:\n%s", ex.what());
+        return;
+    }
 }
  
 int main(int argc, char** argv)
 {
     ros::init(argc, argv, "self_labeller");
-
+ 
     ros::NodeHandle node;  
     tfListener      = new (tf::TransformListener);
     ci_mapper       = new Cloud_Image_Mapper(tfListener);
@@ -263,27 +291,39 @@ int main(int argc, char** argv)
     image_transport::ImageTransport it(node);
     // image_transport::Subscriber sub_raw = it.subscribe("/image_raw", 1, imageCallback_raw);
 
-    pub_img    = it.advertise("/self_label/raw", 1);
+    pub_img_raw         = it.advertise("/self_label/raw", 1);
+    pub_img_label       = it.advertise("/self_label/label", 1);
+    pub_img_depth       = it.advertise("/self_label/depth", 1);
 
-    int skip_msg_count = 0; 
-
-    ros::Rate loop_rate(3);
+    int skip_msg_count = 0;  
+ 
+    ros::Rate loop_rate(1);
     while (ros::ok()) 
     {
-        sensor_msgs::ImageConstPtr msg = ros::topic::waitForMessage<sensor_msgs::Image>("/image_raw", ros::Duration(10));
-        if(skip_msg_count < 5)
-        {
+        sensor_msgs::ImageConstPtr msg = ros::topic::waitForMessage<sensor_msgs::Image>("/image_raw", ros::Duration(5));
+        // if(msg == NULL)
+        if(skip_msg_count < 2)
+        { 
             skip_msg_count ++;
+            cout << "wait for topic msg " << skip_msg_count << endl;
         }
-        else
+        // else if(msg == NULL || skip_msg_count > 20) // finish after cerain number of messages, for testing
+        else if(msg == NULL && skip_msg_count > 2) // rosbag finish
         {
-            imageCallback_raw(msg);
+            cout << "rosbag finished  " << endl;
+            label_path();
+            robot_path_.header.frame_id = world_frame_;
+            break;
         }
+        else if(msg != NULL)
+            imageCallback_raw(msg);
         
+        skip_msg_count ++;
         ros::spinOnce();
         loop_rate.sleep();
     }
-    ros::spinOnce();
+    cout << "out of loop" << endl;
+    // ros::spinOnce();
 
     return 0;
 }
