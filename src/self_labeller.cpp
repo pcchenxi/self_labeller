@@ -21,7 +21,7 @@
 
 #include <pthread.h>
 
-#include "self_labeller.h" 
+#include <self_labeller/self_labeller.h>
 
 
  
@@ -223,6 +223,7 @@ void imageCallback_raw(sensor_msgs::ImageConstPtr image_msg)
             Mat image_raw = cv_bridge::toCvShare(image_msg, "bgr8")->image;
             raw_images_.push_back(image_raw.clone());
 
+            cout << image_raw.rows << " "  << image_raw.cols << endl;
             // imshow("image", image_raw);
             // imshow("image_raw", raw_images_[0]);
             // waitKey(100);
@@ -256,6 +257,39 @@ void imageCallback_raw(sensor_msgs::ImageConstPtr image_msg)
     }
 }
 
+void callback_disparity(const sensor_msgs::PointCloud2ConstPtr &cloud_in)
+{
+    tf::StampedTransform to_camera;
+    
+    // Eigen::Matrix4f transform_base_camera;
+    // transform_base_camera << -0.0611689, -0.997477, 0.0360275, -0.118721, -0.409124, -0.0078673, -0.912445, 1.06345, 0.91042, -0.0705529, -0.407611, 0.127136, 0, 0, 0, 1;
+
+    cout << "input cloud frame: " << cloud_in->header.frame_id << endl;
+    Mat black_img = Mat(540, 960, CV_32FC1, Scalar(0));
+    pcl::PointCloud<pcl::PointXYZRGB> pcl_cloud, cloud_camera;
+    try 
+    {
+        registered_cloud_ = transform_cloud(*cloud_in, "base_link");
+        pcl::fromROSMsg(registered_cloud_, pcl_cloud); 
+        
+        Eigen::Affine3f transform_2 = Eigen::Affine3f::Identity();
+         
+        transform_2.translation() << 0.0, 0.0, 2.0; 
+        transform_2.rotate (Eigen::AngleAxisf (-M_PI/6, Eigen::Vector3f::UnitX()));
+        transform_2.rotate (Eigen::AngleAxisf (-M_PI/2, Eigen::Vector3f::UnitX()));
+        // transform_2.rotate (Eigen::AngleAxisf (-M_PI/2, Eigen::Vector3f::UnitZ()));
+        // pcl::transformPointCloud (pcl_cloud, cloud_camera, transform_base_camera.inverse());
+        pcl::transformPointCloud (pcl_cloud, cloud_camera, transform_2);
+    }
+    catch (tf::TransformException& ex) 
+    {
+        ROS_WARN("[draw_frames] TF exception:\n%s", ex.what());
+        return;
+    }
+
+    ci_mapper->get_disparity(black_img, "kinect2_rgb_optical_frame", cloud_camera);
+}
+
 void callback_velodyne(const sensor_msgs::PointCloud2ConstPtr &cloud_in)
 {
     // registered_cloud_ = cloud_in;
@@ -284,8 +318,10 @@ int main(int argc, char** argv)
     // robot_path_ = pcl::PointCloud<pcl::PointXYZRGB>();
 
     ros::Subscriber sub_cloud   = node.subscribe<sensor_msgs::PointCloud2>("/points_raw", 1, callback_velodyne);
+    // ros::Subscriber sub_dispy   = node.subscribe<sensor_msgs::PointCloud2>("/scan_assembler_nodelet/assembled_cloud", 1, callback_disparity);
+
     pub_cloud                   = node.advertise<sensor_msgs::PointCloud2>("/cloud_filtered", 1);
-    pub_path                   = node.advertise<sensor_msgs::PointCloud2>("/robot_path", 1);
+    pub_path                    = node.advertise<sensor_msgs::PointCloud2>("/robot_path", 1);
     //image_transport::Publisher pub = it.advertise("camera/image", 1);
     
     image_transport::ImageTransport it(node);
@@ -322,8 +358,8 @@ int main(int argc, char** argv)
         ros::spinOnce();
         loop_rate.sleep();
     }
-    cout << "out of loop" << endl;
-    // ros::spinOnce();
+    // cout << "out of loop" << endl;
+    // ros::spin();
 
     return 0;
 }

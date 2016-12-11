@@ -224,13 +224,13 @@ public:
         if(depth < depth_before || depth_before == 0)
         {
             // img_depth_.at<float>(uv.y, uv.x) = depth;
-            cv::circle(img_depth_, uv, 7, Scalar(depth, depth, depth), -1);  
-            cv::circle(img_disparity_, uv, 7, Scalar(disparity, disparity, disparity), -1);  
+            cv::circle(img_depth_, uv, 5, Scalar(depth, depth, depth), -1);  
+            cv::circle(img_disparity_, uv, 5, Scalar(disparity, disparity, disparity), -1);  
 
             if(point_transd.r != 0)
             {
-              cv::circle(img_path_, uv, 7, Scalar(0), -1);  
-              cv::circle(img_rgb_, uv, 7, Scalar(0, 255, 0), -1);  
+              cv::circle(img_path_, uv, 5, Scalar(0), -1);  
+              cv::circle(img_rgb_, uv, 5, Scalar(0, 255, 0), -1);  
             }
 
         }  
@@ -259,8 +259,8 @@ public:
     //   }
     // }
     // cout << "got all image " << img_all_.rows << " " << img_all_.cols << endl;
-    // imshow("image_raw", image_raw);
-    // waitKey(100);
+    imshow("image_disparity", img_disparity_);
+    waitKey(100);
     return 1;  
   }
 };

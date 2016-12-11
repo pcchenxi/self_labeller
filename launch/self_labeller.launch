@@ -3,9 +3,11 @@
 
   <node pkg="self_labeller" type="self_labeller" name="self_labeller" output="screen">
 
-   <!-- <remap from="/points_raw" to="/mapping_nodelet/pointcloud" /> -->
-    <remap from="/points_raw" to="/cloud_filtered" />
+   <remap from="/points_raw" to="/mapping_nodelet/pointcloud" /> 
+  <!--   <remap from="/points_raw" to="/cloud_filtered" />-->
     <remap from="/image_raw" to="/kinect2/qhd/image_color" />
   </node>
+
+  <!-- <node pkg="tf" type="static_transform_publisher" name="kinect_to_base_link" args="0.0 0.0 1.0 -1.57 0.0 -1.57 /base_link /kinect2_rgb_optical_frame 10"/> -->
   
 </launch>
